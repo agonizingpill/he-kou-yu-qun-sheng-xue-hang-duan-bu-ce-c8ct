@@ -6,7 +6,7 @@ from .models import *
 from .schemas import *
 from .auth import current,editor,supervisor,issue,password_hash
 from .common import dump,get
-from . import navigation_service as nav,transect_service as transect,school_service as school,biology_service as biology,resurvey_service as resurvey,release_service as release
+from . import navigation_service as nav,transect_service as transect,school_service as school,biology_service as biology,resurvey_service as resurvey,release_service as release,clutter_service as clutter_svc
 router=APIRouter()
 @router.post('/auth/login')
 def login(data:Login,db=Depends(session)):
@@ -15,7 +15,7 @@ def login(data:Login,db=Depends(session)):
     return {'token':issue(row),'username':row.username,'role':row.role}
 @router.get('/workspace')
 def workspace(db=Depends(session),user=Depends(current)):
-    return {m.__tablename__:[dump(r) for r in db.scalars(select(m).order_by(m.id))] for m in [Boat,Cruise,NavigationClosure,Transect,Echo,SchoolAnalysis,SchoolReview,Net,NetCalibration,BioSample,MissingInterval,Resurvey,SurveyRelease]}
+    return {m.__tablename__:[dump(r) for r in db.scalars(select(m).order_by(m.id))] for m in [Boat,Cruise,NavigationClosure,Transect,Echo,EchoLabel,ClutterFilterVersion,SchoolAnalysis,SchoolReview,Net,NetCalibration,BioSample,MissingInterval,Resurvey,SurveyRelease]}
 @router.post('/cruises')
 def create(data:CruiseInput,db=Depends(session),user=Depends(editor)):return nav.create(db,data,user)
 @router.patch('/cruises/{id}/schedule')
@@ -34,8 +34,22 @@ def echoes(id:int,data:EchoInput,db=Depends(session),user=Depends(editor)):retur
 def simulate(id:int,db=Depends(session),user=Depends(editor)):return transect.simulate(db,id,user)
 @router.post('/schools')
 def analyze(data:AnalysisInput,db=Depends(session),user=Depends(editor)):return school.enqueue(db,data,user)
+@router.post('/schools/{id}/retry')
+def retry_school(id:int,db=Depends(session),user=Depends(editor)):return school.retry(db,id,user)
 @router.post('/schools/{id}/review')
 def review(id:int,data:ReviewInput,db=Depends(session),user=Depends(supervisor)):return school.review(db,id,data,user)
+@router.post('/echo-labels')
+def echo_label(data:EchoLabelInput,db=Depends(session),user=Depends(supervisor)):return clutter_svc.label_echo(db,data,user)
+@router.delete('/echo-labels/{echo_id}')
+def echo_unlabel(echo_id:int,db=Depends(session),user=Depends(supervisor)):return clutter_svc.unlabel_echo(db,echo_id,user)
+@router.patch('/cruises/{id}/holdout')
+def holdout(id:int,data:HoldoutInput,db=Depends(session),user=Depends(supervisor)):return clutter_svc.set_holdout(db,id,data.holdout,user)
+@router.post('/clutter-filters/train')
+def train_filter(data:FilterTrainInput,db=Depends(session),user=Depends(supervisor)):return clutter_svc.train_filter(db,data,user)
+@router.post('/clutter-filters/{id}/enable')
+def enable_filter(id:int,db=Depends(session),user=Depends(supervisor)):return clutter_svc.enable_filter(db,id,user)
+@router.post('/clutter-filters/{id}/reject')
+def reject_filter(id:int,db=Depends(session),user=Depends(supervisor)):return clutter_svc.reject_filter(db,id,user)
 @router.post('/calibrations')
 def calibration(data:CalibrationInput,db=Depends(session),user=Depends(supervisor)):return biology.calibrate(db,data,user)
 @router.post('/samples')

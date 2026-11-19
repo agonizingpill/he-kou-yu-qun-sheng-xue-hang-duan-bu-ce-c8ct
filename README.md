@@ -8,7 +8,7 @@
 
 1. 航次与禁航：具名调查船、带时区航窗、潮汐禁航。开航重新检查冲突；同船同期只能一航次；未开航可改时间恢复。
 2. 声学航段与探头：地理端点、米制长度、38/120/200kHz探头、增益；回波点含沿程距离、经纬度、水深和强度，范围与偏航100米约束。
-3. 群落与噪点：worker实际DBSCAN，复核针对当前回波版本与最新识别ID；有噪点必须解释。同版本重跑识别后，旧复核不会继续放行。
+3. 群落与噪点：worker实际DBSCAN，复核针对当前回波版本与最新识别ID；有噪点必须解释。同版本重跑识别后，旧复核不会继续放行。主管可对确定的底质/鱼群回波打标，训练底质杂波筛选：留验航次标记全程只用于验收，验收需比原识别少误报底质且不多漏鱼才可启用；识别排队时固定筛选版本，重试不改版本，筛除回波仍留底。
 4. 网具与生物样：标称网目、实测尺度、证书和有效期；误差≤10%合格，最新校验须覆盖上海时区完整返航日期。样本引用已复核分析和实际校验记录，不可关联噪点。
 5. 缺测补航：原航段沿程区间不得重叠，主管按区间自动推导补航地理端点；补航回波、噪点复核和生物样齐全后才能接续。空补航可撤销重排。
 6. 图层封存：缺测全部覆盖后结束现场；逐航段最新分析、噪点复核和对应样本齐全后冻结。JSON快照包含回波、聚类、复核、样本、网具与校验，附原始canonical_json及其UTF-8字节SHA256；航次冻结后拒绝业务变更。
@@ -53,6 +53,17 @@ JWT有效8小时，角色按服务端当前账户核验。演示凭据仅用于�
 
 worker从Redis队列领取任务，保存assignments、metrics、失败原因，并写共享artifacts卷。回波版本变化使在途旧版本任务失败或无法复核；队列发送失败标failed返回503，可恢复后重新提交。页面展示真实点绘成的航迹和深度剖面，不用假图。
 
+## 底质杂波筛选与留验
+
+底质回波连成串时同样会被DBSCAN聚成“鱼群”。主管在群落复核页（或杂波筛选页）对回波点逐点标记 `bottom`（确定底质）或 `fish`（确定鱼群），每回波至多一个标记、可撤销。
+
+- **留验隔离**：航次可由主管标为留验（`Cruise.holdout`）。训练只读取非留验航次上的标记；留验航次的标记全程不参与训练，仅在训练时做一次性验收比对，避免监督信息泄漏。
+- **训练**：`clutter.py` 在与聚类同口径的米制缩放坐标上构造水深、强度、相对沿程位置、最近邻距离与局部密度五维特征，用固定2000轮、学习率0.05的确定性批量梯度下降逻辑回归拟合，模型参数与训练输入SHA256随版本入库。非留验标记底/鱼各≥8且总数≥16，留验标记底/鱼各≥4且总数≥16才可训练。
+- **验收口径**：在留验航次上以固定 eps1.2/min_samples4 分别跑“原识别（全量）”与“筛选后（先剔除再聚类）”。误报底质=主管标底质却被赋予鱼群簇标签的点数；漏鱼=主管标鱼群却未进入鱼群（噪点或被剔除）的点数。仅当筛选后误报底质**严格少于**原识别、且漏鱼**不多于**原识别，版本才标记验收通过。未通过的候选版本不可启用。
+- **版本生命周期**：训练产物为 `candidate` 候选；主管启用时旧启用版本转 `superseded`，全局至多一个 `enabled`；候选可拒绝（`rejected`），已启用版本须先被新版本替代。
+- **排队即固定**：提交识别时把当时的启用版本写入 `SchoolAnalysis.filter_version_id`。worker 仅按该固定版本剔除底质后再聚类，并记录 `filtered_echo_ids/filtered_count`；版本后续启停不影响在途任务。失败重试（`/schools/{id}/retry`）沿用原固定版本，不切换到当前启用版本；回波已更新则拒绝重试，须按新版本重新提交。
+- **留底与封存**：被剔除回波不从 `echoes` 删除，照常出现在封存快照的 `layers[].echoes`；每层另存 `clutter_filter`（当次版本号、剔除计数与逐点ID），快照顶层附全部 `clutter_filter_versions` 历史与留验指标。
+
 ## 代码与事务
 
 | 路径 | 职责 |
@@ -60,10 +71,11 @@ worker从Redis队列领取任务，保存assignments、metrics、失败原因，
 | backend/src/models.py、schemas.py | Cruise/NavigationClosure、Transect/Echo、SchoolAnalysis/Review、Net/Calibration/BioSample、MissingInterval/Resurvey、SurveyRelease关系模型与输入契约 |
 | navigation_service.py | 航窗、潮汐冲突、同船占用与开返航 |
 | transect_service.py、school_service.py、algorithm.py、worker.py | 航段长度、探头范围、版本化回波、实际聚类和噪点复核 |
+| clutter.py、clutter_service.py | 底质/鱼群标记、确定性逻辑回归训练、留验验收口径与筛选版本启停 |
 | biology_service.py、resurvey_service.py、release_service.py | 网具、生物样、补测地理接续与JSON冻结 |
 | common.py、auth.py、middlewares.py | 根锁、三角色JWT、动作审计、请求追踪和突发限流 |
-| frontend/src/pages | 六个原生ES modules业务页 |
-| frontend/src/components | voyage-context跨页航次/航段、survey-map真实航迹剖面、controls表单表格 |
+| frontend/src/pages | 六个业务页加杂波筛选页（原生ES modules） |
+| frontend/src/components | voyage-context跨页航次/航段、survey-map真实航迹剖面、echo-marker点图标记、controls表单表格 |
 | frontend/src/api、stores、utils | 请求与会话、航次上下文、格式与保存反馈 |
 
 航船调度按Station→Boat→Cruise锁序；现场业务先锁Cruise根再锁Transect/子记录，补航并发规划在同一根锁下保证一缺测一在途。冻结与现场修改共用Cruise根，防止一边写回波一边交付快照。

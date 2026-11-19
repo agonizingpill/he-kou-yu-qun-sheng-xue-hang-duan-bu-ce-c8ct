@@ -14,3 +14,8 @@ class AnalysisState(StrEnum):
     done='done'
     reviewed='reviewed'
     failed='failed'
+class FilterState(StrEnum):
+    candidate='candidate'
+    enabled='enabled'
+    rejected='rejected'
+    superseded='superseded'

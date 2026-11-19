@@ -2,7 +2,7 @@ from datetime import datetime,timezone,date
 from sqlalchemy import String,Integer,Float,ForeignKey,UniqueConstraint,CheckConstraint,DateTime,Date,JSON,Boolean,Text
 from sqlalchemy.orm import Mapped,mapped_column
 from .database import Base
-from .constants import CruiseState,AnalysisState
+from .constants import CruiseState,AnalysisState,FilterState
 def now():return datetime.now(timezone.utc)
 class User(Base):
     __tablename__='users'
@@ -29,6 +29,7 @@ class Cruise(Base):
     arrive:Mapped[datetime]=mapped_column(DateTime(timezone=True))
     purpose:Mapped[str]=mapped_column(String(160))
     status:Mapped[str]=mapped_column(String(20),default=CruiseState.planned.value)
+    holdout:Mapped[bool]=mapped_column(Boolean,default=False)
 class NavigationClosure(Base):
     __tablename__='navigation_closures'
     __table_args__=(CheckConstraint('end_at > start_at'),)
@@ -75,12 +76,33 @@ class SchoolAnalysis(Base):
     metrics:Mapped[dict]=mapped_column(JSON,default=dict)
     assignments:Mapped[list]=mapped_column(JSON,default=list)
     error:Mapped[str]=mapped_column(String(200),default='')
+    filter_version_id:Mapped[int|None]=mapped_column(ForeignKey('clutter_filter_versions.id'),nullable=True)
+    filtered_count:Mapped[int]=mapped_column(Integer,default=0)
+    filtered_echo_ids:Mapped[list]=mapped_column(JSON,default=list)
 class SchoolReview(Base):
     __tablename__='school_reviews'
     id:Mapped[int]=mapped_column(primary_key=True)
     analysis_id:Mapped[int]=mapped_column(ForeignKey('school_analyses.id'),unique=True)
     noise_note:Mapped[str]=mapped_column(String(240))
     decision:Mapped[str]=mapped_column(String(120))
+class EchoLabel(Base):
+    __tablename__='echo_labels'
+    __table_args__=(UniqueConstraint('echo_id'),)
+    id:Mapped[int]=mapped_column(primary_key=True)
+    echo_id:Mapped[int]=mapped_column(ForeignKey('echoes.id'))
+    kind:Mapped[str]=mapped_column(String(20))
+    note:Mapped[str]=mapped_column(String(200),default='')
+class ClutterFilterVersion(Base):
+    __tablename__='clutter_filter_versions'
+    id:Mapped[int]=mapped_column(primary_key=True)
+    version:Mapped[str]=mapped_column(String(40),unique=True)
+    status:Mapped[str]=mapped_column(String(20),default=FilterState.candidate.value)
+    model:Mapped[dict]=mapped_column(JSON,default=dict)
+    metrics:Mapped[dict]=mapped_column(JSON,default=dict)
+    training_sha256:Mapped[str]=mapped_column(String(64),default='')
+    note:Mapped[str]=mapped_column(String(240),default='')
+    enabled_at:Mapped[datetime|None]=mapped_column(DateTime(timezone=True),nullable=True)
+    created_at:Mapped[datetime]=mapped_column(DateTime(timezone=True),default=now)
 class Net(Base):
     __tablename__='nets'
     id:Mapped[int]=mapped_column(primary_key=True)
